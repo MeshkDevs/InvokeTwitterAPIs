@@ -24,7 +24,7 @@ Invoke-TwitterRestMethod -ResourceURL 'https://api.twitter.com/1.1/direct_messag
 The response will be converted into a ps object
 
 
-2. Invoke-ReadFromTwitterStream                                                               
+2.. Invoke-ReadFromTwitterStream                                                               
 
 Provides a command to access any of the Twitter Streaming APIs
 Pass the streaming api url, the path to a file where the responses will be written, the parameters, the http verb, your $OAuth hash, and the number of minutes to read from the stream (or attempt to) -1 is infinite
@@ -33,7 +33,7 @@ ex.
 Invoke-ReadFromTwitterStream -OAuthSettings $o -OutFilePath 'C:\books\foo.txt' -ResourceURL 'https://stream.twitter.com/1.1/statuses/filter.json' -RestVerb 'POST' -Parameters @{'track' = 'foo'} -MinsToCollectStream 1
 
 
-3.  Invoke-TwitterMediaUpload  
+3...  Invoke-TwitterMediaUpload  
 Provides a command to upload media to Twitter. The media id returned can be used to post a status or tweet with that image.
 This takes the url to upload media, the path to image [jpeg, gif, or png], http verb [POST]
 ex.
