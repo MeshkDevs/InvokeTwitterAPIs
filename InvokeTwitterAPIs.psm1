@@ -128,6 +128,7 @@ function Invoke-TwitterMediaUpload{
           .LINK
           This function evolved from the following blog post https://devcentral.f5.com/articles/introducing-poshtwitpic-ndash-use-powershell-to-post-your-images-to-twitter-via-twitpic
 #>
+    [CmdletBinding()]
     param (
         [parameter(Mandatory)][System.IO.FileInfo] $MediaFilePath,
         [parameter(Mandatory)] [System.URI] $ResourceURL,
@@ -292,8 +293,8 @@ function Invoke-ReadFromTwitterStream{
            .LINK
            This function evolved from the following blog posts http://thoai-nguyen.blogspot.com.tr/2012/03/consume-twitter-stream-oauth-net.html, https://code.google.com/p/pstwitterstream/
 #>
- 
-          Param(
+           [CmdletBinding()]
+           Param(
                 [Parameter(Mandatory)]
                 $OAuthSettings,
                 [Parameter(Mandatory)] 
