@@ -5,9 +5,22 @@
 	 Filename:     	InvokeTwitterAPIs.psm1
 	-------------------------------------------------------------------------
 	 Module Name: InvokeTwitterAPIs
-	 Description: Provides a command to call any Twitter REST APIs v 1.1,
+	 Description: Provides a command to call any Twitter REST API,
                   a command to access any of the Twitter Streaming APIs, 
-                  and a command to upload media to Twitter
+                  and a command to upload media to Twitter.
+
+
+     List of Twitter REST APIs:
+     https://dev.twitter.com/rest/public
+
+     Twitter Streamings APIs Info:
+     https://dev.twitter.com/streaming/overview
+
+     To use these commands, you must obtain a Twitter API key, API secret, 
+     access token and access token secret
+     https://twittercommunity.com/t/how-to-get-my-api-key/7033
+
+     This was developed using Windows PowerShell 4.0.
                   
 	===========================================================================
 #>
