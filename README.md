@@ -3,6 +3,10 @@ PowerShell Module to Invoke the Twitter REST APIs and Streaming APIs v1.1.
 
 You must obtain a Twitter API key, API secret, access token and access token secretmand create a hash with this info that will be passed to the commands
 
+$OAuth = @{'ApiKey' = 'xxxxxxxxxxxxxxxxxxxx'; 
+	     'ApiSecret' = 'xxxxxxxxxxxxxxxxx';
+ 	     'AccessToken' = 'xxxxxxxxxxxxxxx';
+           'AccessTokenSecret' = 'xxxxxxxxxx'} 
 
 
 https://twittercommunity.com/t/how-to-get-my-api-key/7033
