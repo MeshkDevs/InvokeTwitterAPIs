@@ -32,6 +32,7 @@ Pass the streaming api url, the path to a file where the responses will be writt
 ex.
 Invoke-ReadFromTwitterStream -OAuthSettings $o -OutFilePath 'C:\books\foo.txt' -ResourceURL 'https://stream.twitter.com/1.1/statuses/filter.json' -RestVerb 'POST' -Parameters @{'track' = 'foo'} -MinsToCollectStream 1
 
+
 3.  Invoke-TwitterMediaUpload  
 Provides a command to upload media to Twitter. The media id returned can be used to post a status or tweet with that image.
 This takes the url to upload media, the path to image [jpeg, gif, or png], http verb [POST]
