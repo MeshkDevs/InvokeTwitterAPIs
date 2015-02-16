@@ -1,7 +1,7 @@
 # InvokeTwitterAPIs
 PowerShell Module to Invoke the Twitter REST APIs and Streaming APIs v1.1. 
 
-##Before you begin
+#Before you begin...
 
 You must obtain a Twitter API key, API secret, access token and access token secretmand create a hash with this info that will be passed to the commands
 
@@ -31,7 +31,7 @@ Invoke-TwitterRestMethod -ResourceURL 'https://api.twitter.com/1.1/direct_messag
 The response will be converted into a ps object
 
 
-# Invoke-ReadFromTwitterStream                                                               
+#Invoke-ReadFromTwitterStream                                                               
 
 
 Provides a command to access any of the Twitter Streaming APIs
@@ -42,7 +42,7 @@ Invoke-ReadFromTwitterStream -OAuthSettings $OAuth -OutFilePath 'C:\books\foo.tx
 
 
 
-# Invoke-TwitterMediaUpload  
+#Invoke-TwitterMediaUpload  
 
 Provides a command to upload media to Twitter. The media id returned can be used to post a status or tweet with that image.
 This takes the url to upload media, the path to image [jpeg, gif, or png], http verb [POST]
