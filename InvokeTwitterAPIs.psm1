@@ -368,6 +368,8 @@ function Invoke-ReadFromTwitterStream{
                             { return "Finished"}
 
                             $Line = $ResponseStream.ReadLine()
+                            if($Line -eq '') 
+                            { continue }
                             Add-Content $OutFilePath $Line
                             $PowerShellRepresentation = $Line | ConvertFrom-Json
                             $PowerShellRepresentation
