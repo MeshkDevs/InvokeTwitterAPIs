@@ -10,7 +10,11 @@ https://twittercommunity.com/t/how-to-get-my-api-key/7033
 
 Commands:
 
+<<<<<<< HEAD
 1. Invoke-TwitterRestMethod                                          
+=======
+1.Invoke-TwitterRestMethod                                          
+>>>>>>> parent of 618d423... Update README.md
 Provides a command to call any Twitter REST API.  https://dev.twitter.com/rest/public
 Pass the desired resource url, list of parameters [key=value], specify the HTTP verb, your $OAuth hash 
 
@@ -24,7 +28,11 @@ Invoke-TwitterRestMethod -ResourceURL 'https://api.twitter.com/1.1/direct_messag
 The response will be converted into a ps object
 
 
+<<<<<<< HEAD
 2. Invoke-ReadFromTwitterStream                                                               
+=======
+2.Invoke-ReadFromTwitterStream                                                               
+>>>>>>> parent of 618d423... Update README.md
 
 Provides a command to access any of the Twitter Streaming APIs
 Pass the streaming api url, the path to a file where the responses will be written, the parameters, the http verb, your $OAuth hash, and the number of minutes to read from the stream (or attempt to) -1 is infinite
@@ -33,7 +41,11 @@ ex.
 Invoke-ReadFromTwitterStream -OAuthSettings $OAuth -OutFilePath 'C:\books\foo.txt' -ResourceURL 'https://stream.twitter.com/1.1/statuses/filter.json' -RestVerb 'POST' -Parameters @{'track' = 'foo'} -MinsToCollectStream 1
 
 
+<<<<<<< HEAD
 3.  Invoke-TwitterMediaUpload  
+=======
+3.Invoke-TwitterMediaUpload  
+>>>>>>> parent of 618d423... Update README.md
 Provides a command to upload media to Twitter. The media id returned can be used to post a status or tweet with that image.
 This takes the url to upload media, the path to image [jpeg, gif, or png], http verb [POST]
 ex.
