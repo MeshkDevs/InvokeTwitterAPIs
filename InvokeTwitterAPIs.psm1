@@ -2,14 +2,24 @@
 	===========================================================================
 	 Created on:   	2/11/2015 1:04 PM
 	 Created by:   	Shannon Conley & Mehmet Kaya
-	 Filename:     	InvokeTwitterAPIs.psm1
+	 Modified by:   Marc R Kellerman
+     Filename:     	InvokeTwitterAPIs.psm1
 	-------------------------------------------------------------------------
 	 Module Name: InvokeTwitterAPIs
 	 Description: Provides a command to call any Twitter REST API,
                   a command to access any of the Twitter Streaming APIs, 
                   and a command to upload media to Twitter.
 
+     Changes by Marc R Kellerman:
+         Added functions to handle the RateLimitStatus 
+         Added functionality to handle Multiple APIKeys
+         Added some functions to replicate Twitter API calls
 
+         Set your APIKeys like this:
+           [array]$OAuths = @()
+           $OAuths += @{'ApiKey' = 'yourapikey'; 'ApiSecret' = 'yourapisecretkey'; 'AccessToken' = 'yourapiaccesstoken'; 'AccessTokenSecret' = 'yourapitokensecret'}	
+           $OAuths += @{'ApiKey' = 'yourapikey'; 'ApiSecret' = 'yourapisecretkey'; 'AccessToken' = 'yourapiaccesstoken'; 'AccessTokenSecret' = 'yourapitokensecret'}	
+                  
      List of Twitter REST APIs:
      https://dev.twitter.com/rest/public
 
@@ -119,6 +129,119 @@ function Get-OAuth {
 
 }
 
+function Get-OAuthSettings {
+
+<#
+          .SYNOPSIS
+           This function checks RateLimit availability. 
+
+          .PARAMETER Resource
+           The desired twitter resource to check for availability.
+           
+          .PARAMETER RateLimit 
+           Tells the function to wait till it is available.
+
+#>
+        [CmdletBinding()]
+	    [OutputType('System.Management.Automation.PSCustomObject')]
+        Param (
+            [string]$Resource,
+            [switch]$RateLimit
+        )
+    
+        Begin {
+
+            function Get-Eposh {
+                Param ([int]$Eposh) 
+                Process {
+                    $unixEpochStart = new-object DateTime 1970,1,1,0,0,0,([DateTimeKind]::Utc)
+                    If ($Eposh) { [timezone]::CurrentTimeZone.ToLocalTime(([datetime]'1/1/1970').AddSeconds($Eposh)) } 
+                           Else { [int]([DateTime]::UtcNow - $unixEpochStart).TotalSeconds }
+                }
+            }
+
+            if (!($Global:RateLimitStatus)) { Set-RateLimitStatus }
+
+        }
+
+        Process {
+
+            $Eposh = Get-Eposh
+
+            $ResourceLimitStatus = $Global:RateLimitStatus | Where { $_.resource -eq $Resource } | 
+                                                             Sort @{expression="remaining";Descending=$true},@{expression="reset";Ascending=$true} | 
+                                                             Select -First 1
+    
+            If ($ResourceLimitStatus) { Write-Warning "$(Get-Date) [InvokeTwitterAPI] : $($ResourceLimitStatus.resource) (limit:$($ResourceLimitStatus.limit), remaining:$($ResourceLimitStatus.remaining), reset:$($ResourceLimitStatus.reset)) - $($ResourceLimitStatus.accesstoken)" } 
+                                 Else { Write-Warning "$(Get-Date) [InvokeTwitterAPI] : RateLimit Error : $($Resource)"; Return }
+
+
+            if (($ResourceLimitStatus.remaining -eq 0) -or (($ResourceLimitStatus.reset - $Eposh) -lt 1)) { 
+                Set-RateLimitStatus
+                $ResourceLimitStatus = $Global:RateLimitStatus | Where { $_.resource -eq $Resource } | 
+                                                                 Sort @{expression="remaining";Descending=$true},@{expression="reset";Ascending=$true} | 
+                                                                 Select -First 1
+            }
+
+            if ($ResourceLimitStatus.remaining -eq 0) { 
+
+                [int]$SleepSeconds = $ResourceLimitStatus.reset - (Get-Eposh) + 1
+        
+                if ($SleepSeconds -gt 0) {
+                    if ($RateLimit.IsPresent) {
+
+                      Write-Warning "$(Get-Date) [InvokeTwitterAPI] : Wait $SleepSeconds..."
+                      Sleep -Seconds $SleepSeconds
+                      Set-RateLimitStatus
+                      $ResourceLimitStatus = $Global:RateLimitStatus | Where { $_.resource -eq $Resource } | 
+                                                                       Sort @{expression="remaining";Descending=$true},@{expression="reset";Ascending=$true} | 
+                                                                       Select -First 1
+                    
+                    } Else { Return }
+                }
+        
+            }
+
+            # Update the remaining counter for that resource
+            $Global:RateLimitStatus | ? { $_.accesstoken -eq $ResourceLimitStatus.accesstoken } | ? { $_.resource -eq $Resource } | % { $_.remaining-- }
+            
+            # Return the OAuthSettings for the selected access_token
+            $OAuthSettings = $OAuths | ? { $_.accesstoken -eq $ResourceLimitStatus.accesstoken }
+
+            Return $OAuthSettings
+        }
+
+}
+
+function Set-RateLimitStatus {
+<#
+          .SYNOPSIS
+           This function gets the Rate Limit Status from Twitter and set's the Global:RateLimitStatus variable.
+           
+#>
+        [CmdletBinding()]
+	    [OutputType('System.Management.Automation.PSCustomObject')]
+        Param ()
+
+        Process {
+
+            [array]$Global:RateLimitStatus = @()
+            ForEach ($OAuthSettings in $OAuths) {
+
+                $ApplicationRateLimitStatus = Get-TwitterApplication_RateLimitStatus -OAuthSettings $OAuthSettings
+                $ApplicationRateLimitStatus.resources.PSObject.Properties | ForEach { 
+                    $_.value | ForEach { 
+                        $_.PSObject.Properties | ForEach { 
+                            $Global:RateLimitStatus += $_ | Select @{ n='accesstoken'; e={ $ApplicationRateLimitStatus.rate_limit_context.access_token }}, @{ n='resource'; e={ $_.name }}, @{ n='limit'; e={ $_.value.limit }}, @{ n='remaining'; e={ $_.value.remaining }}, @{ n='reset'; e={ $_.value.reset }} 
+                        } 
+                    } 
+                } 
+
+            }
+
+        }
+
+}
 
 function Invoke-TwitterMediaUpload{
 
@@ -190,8 +313,6 @@ function Invoke-TwitterMediaUpload{
     }
     }
 }
- 
-
 
 function Invoke-TwitterRestMethod{
 <#
@@ -382,3 +503,1026 @@ function Invoke-ReadFromTwitterStream{
                 }
               }
 }
+
+
+
+
+
+#region [ Public API ] ======================================
+
+function Get-TwitterStatuses_MentionsTimeline {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET statuses/mentions_timeline
+#>
+
+    [CmdletBinding()]  
+	param (
+
+		[Parameter(Mandatory = $false)]
+		[int]
+		$count,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$since_id,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$max_id,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$trim_user,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$contributor_details,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$include_entities
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/mentions_timeline.json"
+        [string]$Resouce     = "/statuses/mentions_timeline"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings
+                  
+    }
+
+}
+
+function Get-TwitterStatuses_UserTimeline {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET statuses/user_timeline
+
+          .PARAMETER all
+           Will handle the paging and return all.
+#>
+    [CmdletBinding(DefaultParameterSetName="RequestById")]  
+	param (
+
+		[Parameter(Mandatory = $true,ParameterSetName="RequestById", Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[Alias("id")]
+        [int64]
+		$user_id,
+
+		[Parameter(Mandatory = $true,ParameterSetName="RequestByName", Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[system.string]
+		$screen_name,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$since_id,
+
+		[Parameter(Mandatory = $false)]
+		[int]
+		$count,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$max_id,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$trim_user,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$exclude_replies,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$contributor_details,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$include_rts,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$all
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/user_timeline.json"
+        [string]$Resource    = "/statuses/user_timeline"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+                   $Parameters.Remove('all')
+
+        If ($all.IsPresent) { $Parameters.count = 200 } # Overide if we want to get all
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+
+      if (($all.IsPresent) -and ($Results.id)) {
+        $Parameters.max_id = [int64]($Results.id | Measure-Object -Minimum | Select -Expand Minimum) -1
+        Get-TwitterStatuses_UserTimeline @Parameters -all
+      }
+            
+    }
+
+}
+
+function Get-TwitterStatuses_HomeTimeline {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET statuses/home_timeline
+#>
+    [CmdletBinding()]  
+	param (
+
+		[Parameter(Mandatory = $false)]
+		[int]
+		$count,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$since_id,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$max_id,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$trim_user,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$exclude_replies,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$contributor_details,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$include_entities
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/home_timeline.json"
+        [string]$Resource     = "/statuses/home_timeline"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+                  
+    }
+
+}
+
+function Get-TwitterStatuses_RetweetsOfMe {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET statuses/retweets_of_me
+#>
+    [CmdletBinding()]  
+	param (
+
+		[Parameter(Mandatory = $false)]
+		[int]
+		$count,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$since_id,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$max_id,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$trim_user,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$exclude_replies,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$contributor_details,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$include_entities
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/home_timeline.json"
+        [string]$Resource     = "/statuses/home_timeline"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+                  
+    }
+
+}
+
+function Get-TwitterStatuses_RetweetsID {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET statuses/retweets/:id
+#>
+    [CmdletBinding(DefaultParameterSetName="RequestById")]  
+	param (
+
+		[Parameter(Mandatory = $true,ParameterSetName="RequestById", Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[int64]
+		$id,
+
+		[Parameter(Mandatory = $false)]
+		[int]
+		$count,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$trim_user
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/retweets/:id.json" -Replace ":id", "$id"
+        [string]$Resource    = "/statuses/retweets/:id"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+      
+    }
+
+}
+
+function Get-TwitterStatuses_ShowID {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET statuses/show/:id
+#>
+    [CmdletBinding()]  
+	param (
+
+		[Parameter(Mandatory = $true, Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[int64]
+		$id,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$trim_user,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$include_my_retweet,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$include_entities
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/show.json"
+        [string]$Resource    = "/statuses/show/:id"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+      
+    }
+
+}
+
+function Post-TwitterStatuses_DestroyID {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for POST statuses/destroy/:id
+
+          .DESCRIPTION
+          Destroys the status specified by the required ID parameter. The authenticating user must be the author of the specified status. Returns the destroyed status if successful.
+
+          .LINK
+          https://dev.twitter.com/rest/reference/post/statuses/destroy/%3Aid
+#>
+    [CmdletBinding()]  
+	param (
+
+		[Parameter(Mandatory = $true, Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[int64]
+		$id,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$trim_user
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "POST"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/destroy/:id.json" -Replace ":id", "$id"
+        [string]$Resouce     = "/statuses/destroy/:id"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+      
+    }
+
+}
+
+function Post-TwitterStatuses_Update {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for POST statuses/update
+
+          .DESCRIPTION
+          Updates the authenticating user’s current status, also known as Tweeting.
+
+          For each update attempt, the update text is compared with the authenticating user’s recent Tweets. Any attempt that would result in duplication will be blocked, resulting in a 403 error. Therefore, a user cannot submit the same status twice in a row.
+
+          While not rate limited by the API a user is limited in the number of Tweets they can create at a time. If the number of updates posted by the user reaches the current allowed limit this method will return an HTTP 403 error.
+
+          .LINK
+          https://dev.twitter.com/rest/reference/post/statuses/destroy/%3Aid
+#>
+    [CmdletBinding()]  
+    param (
+
+		[Parameter(Mandatory = $true, Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[string]
+		$status,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$in_reply_to_status_id,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$possibly_sensitive,
+
+		[Parameter(Mandatory = $false)]
+		[double]
+		$lat,
+
+		[Parameter(Mandatory = $false)]
+		[double]
+		$long,
+
+		[Parameter(Mandatory = $false)]
+		[string]
+		$place_id,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$display_coordinates,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$trim_user,
+
+		[Parameter(Mandatory = $false)]
+		[int64[]]
+		$media_ids
+
+    )
+
+    Begin {
+        
+        
+        [string]$RestVerb    = "POST"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/update.json"
+        [string]$Resouce     = "/statuses/update"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+      
+    }
+
+}
+
+function Post-TwitterStatuses_RetweetID {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET statuses/retweet/:id
+#>
+    [CmdletBinding()]  
+	param (
+
+		[Parameter(Mandatory = $true, Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[int64]
+		$id,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$trim_user
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "POST"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/retweet/:id.json" -Replace ":id", "$id"
+        [string]$Resouce     = "/statuses/retweet/:id"
+               
+        [hashtable]$Parameters    = $PSBoundParameters
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+      
+    }
+
+}
+
+function Post-TwitterStatuses_UnretweetID {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for POST statuses/unretweet/:id
+#>
+    [CmdletBinding()]  
+	param (
+
+		[Parameter(Mandatory = $true, Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[int64]
+		$id,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$trim_user
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "POST"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/unretweet/:id.json" -Replace ":id", "$id"
+        [string]$Resource    = "/statuses/unretweet/:id"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+      
+    }
+
+}
+
+# function POST statuses/update_with_media
+# function GET statuses/oembed
+
+function Get-TwitterStatuses_Retweeters_IDs {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET statuses/retweeters/ids
+
+          .PARAMETER all
+           Will handle the paging and return all.
+#>
+    [CmdletBinding()]  
+	param (
+
+		[Parameter(Mandatory = $true, Position=0,
+                   ValueFromPipeline=$true,
+                   ValueFromPipelineByPropertyName=$true)]
+		[int64]
+		$id,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$cursor,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$stringify_ids,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$all
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/retweeters/ids.json"
+        [string]$Resource    = "/retweeters/ids"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+                   $Parameters.Remove('all')
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { [int64[]]$_.ids }
+      
+      While (($all.IsPresent) -and ($Results.next_cursor)) {
+
+        $Parameters.cursor = $Results.next_cursor
+        
+        [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+        Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { [int64[]]$_.ids }
+      
+      }
+
+    }
+
+}
+
+function Get-TwitterStatuses_Lookup {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET statuses/lookup
+#>
+    [CmdletBinding()]  
+	param (
+
+		[Parameter(Mandatory = $true, Position=0,
+                   ValueFromPipeline=$true,
+                   ValueFromPipelineByPropertyName=$true)]
+		[int64[]]
+		$id,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$include_entities,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$trim_user,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$map
+
+    )
+
+    Begin {
+
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/statuses/lookup.json"
+        [string]$Resource    = "/statuses/lookup"
+
+        $max_count = 100
+        [int64[]]$ids = @()
+
+    }
+
+    Process {
+
+        [hashtable]$Parameters = $PSBoundParameters
+
+        $ids += $id
+
+        While ($ids.Count -ge $max_count) {
+
+            If ($Parameters.id) { $Parameters.id = [string](($ids[$i..($i+$max_count-1)] | ? { $_ }) -Join ',') }
+            
+            [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+            Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | % { $_ }
+            
+            [int64[]]$ids = $ids | Select -Skip $max_count
+
+        }
+
+    }
+
+    End {
+
+        If ($ids.Count) {
+
+            If ($Parameters.id) { $Parameters.id = [string](($ids | ? { $_ }) -Join ',') }
+
+            [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+            Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings  | % { $_ }
+
+        }
+
+    }
+
+}
+
+# function POST media/upload
+# function POST media/upload chunked
+# function GET direct_messages/sent
+# function GET direct_messages/show
+# function GET search/tweets
+# function GET direct_messages
+# function POST direct_messages/destroy
+# function POST direct_messages/new
+# function GET friendships/no_retweets/ids
+
+function Get-TwitterFriends_IDs {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET friends/ids
+
+          .PARAMETER all
+           Will handle the paging and return all.
+#>
+    [CmdletBinding(DefaultParameterSetName="RequestById")]  
+	param (
+
+		[Parameter(Mandatory = $true,
+                   ParameterSetName="RequestById", Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[Alias("id")]
+        [int64]
+		$user_id,
+
+		[Parameter(Mandatory = $true,
+                   ParameterSetName="RequestByName", Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[system.string]
+		$screen_name,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$cursor,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$stringify_ids,
+
+		[Parameter(Mandatory = $false)]
+		[int]
+		$count,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$all
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/friends/ids.json"
+        [string]$Resource    = "/friends/ids"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+                   $Parameters.Remove('all')
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { [int64[]]$_.ids }
+      
+      While (($all.IsPresent) -and ($Results.next_cursor)) {
+
+        $Parameters.cursor = $Results.next_cursor
+        
+        [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+        Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { [int64[]]$_.ids }
+
+      }
+
+    }
+
+}
+
+function Get-TwitterFollowers_IDs {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET followers/ids
+
+          .PARAMETER all
+           Will handle the paging and return all.
+#>
+    [CmdletBinding(DefaultParameterSetName="RequestById")]  
+	param (
+
+		[Parameter(Mandatory = $true,ParameterSetName="RequestById", Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[Alias("id")]
+        [int64]
+		$user_id,
+
+		[Parameter(Mandatory = $true,ParameterSetName="RequestByName", Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[system.string]
+		$screen_name,
+
+		[Parameter(Mandatory = $false)]
+		[int64]
+		$cursor,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$stringify_ids,
+
+		[Parameter(Mandatory = $false)]
+		[int]
+		$count,
+
+		[Parameter(Mandatory = $false)]
+		[switch]
+		$all
+
+    )
+
+    Begin {
+        
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/followers/ids.json"
+        [string]$Resource    = "/followers/ids"
+
+        [hashtable]$Parameters    = $PSBoundParameters
+                   $Parameters.Remove('all')
+
+    }
+
+    Process {
+
+      [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+      Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { [int64[]]$_.ids }
+      
+      While (($all.IsPresent) -and ($Results.next_cursor)) {
+
+        $Parameters.cursor = $Results.next_cursor
+
+        [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+        Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { [int64[]]$_.ids }
+        
+      }
+
+    }
+
+}
+
+# function GET friendships/incoming
+# function GET friendships/outgoing
+# function POST friendships/create
+# function POST friendships/destroy
+# function POST friendships/update
+# function GET friendships/show
+# function GET friends/list
+# function GET followers/list
+# function GET friendships/lookup
+# function GET account/settings
+# function GET account/verify_credentials
+# function POST account/settings
+# function POST account/update_delivery_device
+# function POST account/update_profile
+# function POST account/update_profile_background_image
+# function POST account/update_profile_image
+# function GET blocks/list
+# function GET blocks/ids
+# function POST blocks/create
+# function POST blocks/destroy
+
+function Get-TwitterUser_Lookup {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET user/lookup
+#>
+    [CmdletBinding(DefaultParameterSetName="RequestById")]  
+	param (
+
+		[Parameter(Mandatory = $true,ParameterSetName="RequestById", Position=0,
+                   ValueFromPipeline=$true,
+                   ValueFromPipelineByPropertyName=$true)]
+		[Alias("id")]
+        [int64[]]
+		$user_id,
+
+		[Parameter(Mandatory = $true,ParameterSetName="RequestByName", Position=0,
+                   ValueFromPipelineByPropertyName=$true)]
+		[system.string[]]
+		$screen_name,
+
+		[Parameter(Mandatory = $false)]
+		[boolean]
+		$include_entities
+
+    )
+
+    Begin {
+
+        [string]$RestVerb    = "GET"
+        [string]$ResourceURL = "https://api.twitter.com/1.1/users/lookup.json"
+        [string]$Resource    = "/users/lookup"
+
+        $max_count = 100
+        [int64[]]$user_ids = @()
+        [system.string[]]$screen_names = @()
+
+    }
+
+    Process {
+
+        [hashtable]$Parameters = $PSBoundParameters
+
+        $user_ids += $user_id
+        $screen_names += $screen_name
+
+        [int]$NCount = $user_ids.count + $screen_names.count
+
+        While ($NCount -ge $max_count) {
+
+            If ($Parameters.user_id)     { $Parameters.user_id     = [string](($user_ids[$i..($i+$max_count-1)] | ? { $_ }) -Join ',') }
+            If ($Parameters.screen_name) { $Parameters.screen_name = [string](($screen_names[$i..($i+$max_count-1)] | ? { $_ }) -Join ',') }
+
+            [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+            Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+            
+            [int64[]]$user_ids = $user_ids | Select -Skip $max_count
+            [system.string[]]$screen_names = $screen_names | Select -Skip $max_count
+
+            [int]$NCount = $user_ids.count + $screen_names.count
+
+        }
+
+    }
+
+    End {
+
+        If ($NCount) {
+
+            If ($Parameters.user_id)     { $Parameters.user_id     = [string](($user_ids | ? { $_ }) -Join ',') }
+            If ($Parameters.screen_name) { $Parameters.screen_name = [string](($screen_names | ? { $_ }) -Join ',') }
+
+            [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit
+            Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings | Tee-Object -Variable Results | % { $_ }
+
+        }
+
+    }
+
+}
+
+# function GET users/show
+# function GET users/search
+# function POST account/remove_profile_banner
+# function POST account/update_profile_banner
+# function GET users/profile_banner
+# function POST mutes/users/create
+# function POST mutes/users/destroy
+# function GET mutes/users/ids
+# function GET mutes/users/list
+# function GET users/suggestions/:slug
+# function GET users/suggestions
+# function GET users/suggestions/:slug/members
+# function GET favorites/list
+# function POST favorites/destroy
+# function POST favorites/create
+# function GET lists/list
+# function GET lists/statuses
+# function POST lists/members/destroy
+# function GET lists/memberships
+# function GET lists/subscribers
+# function POST lists/subscribers/create
+# function GET lists/subscribers/show
+# function POST lists/subscribers/destroy
+# function POST lists/members/create_all
+# function GET lists/members/show
+# function GET lists/members
+# function POST lists/members/create
+# function POST lists/destroy
+# function POST lists/update
+# function POST lists/create
+# function GET lists/show
+# function GET lists/subscriptions
+# function POST lists/members/destroy_all
+# function GET lists/ownerships
+# function GET saved_searches/list
+# function GET saved_searches/show/:id
+# function POST saved_searches/create
+# function POST saved_searches/destroy/:id
+# function GET geo/id/:place_id
+# function GET geo/reverse_geocode
+# function GET geo/search
+# function POST geo/place
+# function GET trends/place
+# function GET trends/available
+
+function Get-TwitterApplication_RateLimitStatus {
+<#
+          .SYNOPSIS
+           Mimics Twitter API parameters for GET application/rate_limit_status
+
+          .PARAMETER force
+           skips the checking of the RateLimit.. because we are asking to get the RateLimit (which could be empty).
+#>
+    [CmdletBinding()]  
+	param (
+
+		[Parameter(Mandatory = $false)]
+		[system.string]
+		$resources,
+
+        [hashtable]
+        $OAuthSettings
+
+    )
+
+    Begin {
+        
+        $RestVerb    = "GET"
+        $ResourceURL = "https://api.twitter.com/1.1/application/rate_limit_status.json"
+        
+        [hashtable]$Parameters    = $PSBoundParameters
+                   $Parameters.Remove('OAuthSettings')
+
+    }
+
+    Process {
+
+        If (-Not $OAuthSettings) { [hashtable]$OAuthSettings = Get-OAuthSettings -Resource $Resource -RateLimit }
+        Invoke-TwitterRestMethod -ResourceURL $ResourceURL -RestVerb $RestVerb -Parameters $Parameters -OAuthSettings $OAuthSettings
+
+    }
+
+}
+
+# function GET help/configuration
+# function GET help/languages
+# function GET help/privacy
+# function GET help/tos
+# function GET trends/closest
+# function POST users/report_spam
+
+#endregion ==================================================
+
